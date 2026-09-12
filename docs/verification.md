@@ -154,8 +154,6 @@ official ZIP.
   tilt packet changes do not establish these additional brush behaviors.
 - Repeated launch stability, other Krita versions and other display/scaling
   configurations. A successful launch or context does not cover these cases.
-- GitHub submission and Windows Actions results. Local build/test success must
-  not be reported as a successful remote workflow run.
 
 ## GitHub and Windows Actions
 
@@ -169,7 +167,12 @@ locally with an incompatible inherited PowerShell module path; the original
 CI failure was not fully reproduced locally. The deployment test starts that
 subprocess with its own module path, following Microsoft's
 [cross-version subprocess guidance](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath?view=powershell-7.6#starting-windows-powershell-from-powershell-7).
-A corrected remote workflow result is still pending.
+The corrected commit `b00c8da99c44bcca181df8cfb5c32b65227aaebd` passed the
+[second Windows Actions run](https://github.com/Kitsudora/ChapArm/actions/runs/34693984767):
+both x64 and Win32 jobs succeeded, including native CTest, PowerShell parsing,
+the x64 Python **12-test** suite, wheel build and artifact uploads. The runner
+used Python **3.12.10**. This is remote CI evidence; the Krita painting evidence
+above was collected separately on the local interactive Windows desktop.
 
 ## Earlier handoff evidence
 
