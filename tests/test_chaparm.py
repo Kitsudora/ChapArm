@@ -344,3 +344,75 @@ def test_windows_python_publisher_loads_native_bridge_and_closes_session():
     finally:
         publisher.close()
     assert publisher.status()["publisher_pid"] == 0
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Krita deployment uses Windows PowerShell")
+def test_windows_krita_deployment_preserves_existing_and_changed_files(tmp_path):
+    script = Path(__file__).resolve().parents[1] / "scripts/deploy-krita.ps1"
+    app_dir = tmp_path / "portable \u4e2d\u6587 \U0001f58c" / "bin"
+    app_dir.mkdir(parents=True)
+
+    def pe_fixture(path, machine, payload):
+        # Only PE architecture inspection is exercised; these files are never executed.
+        data = bytearray(70)
+        data[:2] = b"MZ"
+        data[60:64] = (64).to_bytes(4, "little")
+        data[64:68] = b"PE\0\0"
+        data[68:70] = machine.to_bytes(2, "little")
+        path.write_bytes(data + payload)
+        return path
+
+    app = pe_fixture(app_dir / "krita.exe", 0x8664, b"original application")
+    library = pe_fixture(app_dir / "krita.dll", 0x8664, b"original library")
+    source_launcher = pe_fixture(tmp_path / "launcher.exe", 0x8664, b"launcher")
+    source_dll = pe_fixture(tmp_path / "provider.dll", 0x8664, b"provider")
+    wrong_dll = pe_fixture(tmp_path / "wrong.dll", 0x014C, b"wrong architecture")
+    original = {path: path.read_bytes() for path in (app, library)}
+    launcher = app_dir / "chaparm-krita.exe"
+    local_marker = app_dir / "chaparm-krita.exe.local"
+    provider = app_dir / "Wintab32.dll"
+    manifest = app_dir / "ChapArm.krita-deployment.json"
+
+    def deploy(*, remove=False, dll=source_dll, error=None, env=None):
+        args = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", str(script), "-AppExecutable", str(app)]
+        args += (["-Remove"] if remove else
+                 ["-LauncherPath", str(source_launcher), "-DllPath", str(dll)])
+        result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
+                                errors="replace", timeout=20, env=env)
+        output = result.stdout + result.stderr
+        if error:
+            assert result.returncode != 0 and error in output, output
+        else:
+            assert result.returncode == 0, output
+
+    deploy(dll=wrong_dll, error="architectures must match")
+    deploy(env={**os.environ, "WINDIR": str(tmp_path)}, error="Windows/system directories")
+    assert sorted(path.name for path in app_dir.iterdir()) == ["krita.dll", "krita.exe"]
+    old_manifest = app_dir / "ChapArm.wintab-deployment.json"
+    old_manifest.write_text("{}")
+    deploy(error="deploy-wintab.ps1")
+    assert old_manifest.read_text() == "{}"
+    old_manifest.unlink()
+    provider.write_bytes(b"existing tablet provider")
+    deploy(error="already exists")
+    assert provider.read_bytes() == b"existing tablet provider"
+    provider.unlink()
+    deploy()
+    assert launcher.read_bytes() == source_launcher.read_bytes()
+    assert provider.read_bytes() == source_dll.read_bytes()
+    assert local_marker.is_file() and local_marker.read_bytes() == b""
+    record = json.loads(manifest.read_text(encoding="utf-8-sig"))
+    assert record["application"].casefold() == str(app).casefold()
+    deployed = {path: path.read_bytes() for path in (launcher, local_marker, provider, manifest)}
+    deploy(error="already exists")
+    for changed in (launcher, local_marker, provider):
+        changed.write_bytes(deployed[changed] + b"changed")
+        deploy(remove=True, error="A deployed file changed")
+        for untouched in deployed.keys() - {changed}:
+            assert untouched.read_bytes() == deployed[untouched]
+        changed.write_bytes(deployed[changed])
+    deploy(remove=True)
+    assert sorted(path.name for path in app_dir.iterdir()) == ["krita.dll", "krita.exe"]
+    for path, contents in original.items():
+        assert path.read_bytes() == contents

@@ -7,37 +7,33 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# The third column is the x86 stdcall parameter byte count. Export names and
-# official ordinals are unchanged on both architectures.
+# Let the linker resolve the internal stdcall decoration on x86. Explicit
+# name=_name@bytes aliases lose decorated symbols from MSVC's import library.
+# Public export names and official ordinals are identical on both architectures.
 set(exports
-  WTInfoA,20,12 WTInfoW,1020,12 WTOpenA,21,12 WTOpenW,1021,12
-  WTClose,22,4 WTPacketsGet,23,12 WTPacket,24,12 WTEnable,40,8 WTOverlap,41,8
-  WTConfig,60,8 WTGetA,61,8 WTGetW,1061,8 WTSetA,62,8 WTSetW,1062,8
-  WTExtGet,63,12 WTExtSet,64,12 WTSave,65,8 WTRestore,66,12
-  WTPacketsPeek,80,12 WTDataGet,81,24 WTDataPeek,82,24
-  WTQueueSizeGet,84,4 WTQueueSizeSet,85,8 WTQueuePacketsEx,200,12
-  WTMgrOpen,100,8 WTMgrClose,101,4 WTMgrContextEnum,120,12
-  WTMgrContextOwner,121,8 WTMgrDefContext,122,8 WTMgrDefContextEx,206,12
-  WTMgrDeviceConfig,140,12 WTMgrExt,180,12 WTMgrCsrEnable,181,12
-  WTMgrCsrButtonMap,182,16 WTMgrCsrPressureBtnMarks,183,16
-  WTMgrCsrPressureResponse,184,16 WTMgrCsrExt,185,16
-  WTMgrConfigReplaceExA,202,16 WTMgrConfigReplaceExW,1202,16
-  WTMgrPacketHookExA,203,16 WTMgrPacketHookExW,1203,16
-  WTMgrPacketUnhook,204,4 WTMgrPacketHookNext,205,16
-  WTMgrCsrPressureBtnMarksEx,201,16
-  ChapArmOpenPublisher,3000,4 ChapArmPublish,3001,8
-  ChapArmClosePublisher,3002,4 ChapArmGetStatus,3003,8)
+  WTInfoA,20 WTInfoW,1020 WTOpenA,21 WTOpenW,1021
+  WTClose,22 WTPacketsGet,23 WTPacket,24 WTEnable,40 WTOverlap,41
+  WTConfig,60 WTGetA,61 WTGetW,1061 WTSetA,62 WTSetW,1062
+  WTExtGet,63 WTExtSet,64 WTSave,65 WTRestore,66
+  WTPacketsPeek,80 WTDataGet,81 WTDataPeek,82
+  WTQueueSizeGet,84 WTQueueSizeSet,85 WTQueuePacketsEx,200
+  WTMgrOpen,100 WTMgrClose,101 WTMgrContextEnum,120
+  WTMgrContextOwner,121 WTMgrDefContext,122 WTMgrDefContextEx,206
+  WTMgrDeviceConfig,140 WTMgrExt,180 WTMgrCsrEnable,181
+  WTMgrCsrButtonMap,182 WTMgrCsrPressureBtnMarks,183
+  WTMgrCsrPressureResponse,184 WTMgrCsrExt,185
+  WTMgrConfigReplaceExA,202 WTMgrConfigReplaceExW,1202
+  WTMgrPacketHookExA,203 WTMgrPacketHookExW,1203
+  WTMgrPacketUnhook,204 WTMgrPacketHookNext,205
+  WTMgrCsrPressureBtnMarksEx,201
+  ChapArmOpenPublisher,3000 ChapArmPublish,3001
+  ChapArmClosePublisher,3002 ChapArmGetStatus,3003)
 set(def "LIBRARY Wintab32\nEXPORTS\n")
 foreach(entry IN LISTS exports)
   string(REPLACE "," ";" parts "${entry}")
   list(GET parts 0 name)
   list(GET parts 1 ordinal)
-  list(GET parts 2 bytes)
-  if(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 4)
-    string(APPEND def "  ${name}=_${name}@${bytes} @${ordinal}\n")
-  else()
-    string(APPEND def "  ${name} @${ordinal}\n")
-  endif()
+  string(APPEND def "  ${name} @${ordinal}\n")
 endforeach()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/wintab.def" "${def}")
 add_library(Wintab32 SHARED src/provider.cpp "${CMAKE_CURRENT_BINARY_DIR}/wintab.def")
@@ -52,11 +48,35 @@ else()
   target_link_options(Wintab32 PRIVATE -static-libgcc -static-libstdc++)
 endif()
 
+add_executable(chaparm-krita WIN32 src/krita_launcher.cpp)
+target_compile_definitions(chaparm-krita PRIVATE WIN32 NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(chaparm-krita PRIVATE user32)
+if(MSVC)
+  target_compile_options(chaparm-krita PRIVATE /W4 /permissive-)
+  # DotLocal redirection is ignored for manifested executables unless a
+  # machine-wide registry override is enabled. This launcher needs no override.
+  # Use the original narrow CRT entry point so Qt can recognize untouched argv
+  # and recover the complete Unicode command line through the Windows API.
+  target_link_options(chaparm-krita PRIVATE /MANIFEST:NO /ENTRY:mainCRTStartup)
+elseif(MINGW)
+  target_compile_options(chaparm-krita PRIVATE -Wall -Wextra -Wpedantic)
+  target_link_options(chaparm-krita PRIVATE -static-libgcc -static-libstdc++)
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
+  # Reuse the native probe source for a small, test-only C entry point. No Krita
+  # installation or third-party binaries are needed by the automated loader gate.
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/krita_fixture.def" "EXPORTS\n  krita_main\n")
+  add_library(krita_launcher_fixture SHARED tests/wintab_probe.cpp "${CMAKE_CURRENT_BINARY_DIR}/krita_fixture.def")
+  target_compile_definitions(krita_launcher_fixture PRIVATE CHAPARM_KRITA_FIXTURE WIN32 NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(krita_launcher_fixture PRIVATE shell32)
+  set_target_properties(krita_launcher_fixture PROPERTIES PREFIX "")
   add_executable(wintab_probe tests/wintab_probe.cpp)
   target_link_libraries(wintab_probe PRIVATE Wintab32 user32)
+  add_dependencies(wintab_probe chaparm-krita krita_launcher_fixture)
   if(MINGW)
+    target_link_options(krita_launcher_fixture PRIVATE -static-libgcc -static-libstdc++)
     target_link_options(wintab_probe PRIVATE -municode -static-libgcc -static-libstdc++)
   endif()
   add_test(NAME wintab_abi_and_stream COMMAND wintab_probe --selftest)

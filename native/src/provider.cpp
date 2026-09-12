@@ -21,6 +21,10 @@ constexpr std::uint64_t kStaleMs = 500;
 constexpr std::size_t kRingSize = 2048;
 constexpr LONG kAxisMax = 65535;
 constexpr UINT kPressureMax = 8191;
+// Qt/Krita classifies cursor IDs modulo three: 0=cursor, 1=pen, 2=eraser.
+// Keep slot zero queryable but inactive, so cursor enumeration stays contiguous.
+constexpr UINT kPenCursor = 1;
+constexpr UINT kCursorCount = 2;
 constexpr WTPKT kPacketData = PK_CONTEXT | PK_STATUS | PK_TIME | PK_CHANGED |
     PK_SERIAL_NUMBER | PK_CURSOR | PK_BUTTONS | PK_X | PK_Y | PK_Z |
     PK_NORMAL_PRESSURE | PK_TANGENT_PRESSURE | PK_ORIENTATION;
@@ -469,7 +473,8 @@ UINT info(bool wide, UINT category, UINT index, void* output) {
         case IFC_WINTABID: return copyText(wide, output, L"ChapArm Wintab 1.4");
         case IFC_SPECVERSION: return copyValue(output, WORD{0x0104});
         case IFC_IMPLVERSION: return copyValue(output, WORD{0x0100});
-        case IFC_NDEVICES: case IFC_NCURSORS: return copyValue(output, UINT{1});
+        case IFC_NDEVICES: return copyValue(output, UINT{1});
+        case IFC_NCURSORS: return copyValue(output, kCursorCount);
         case IFC_NCONTEXTS: return copyValue(output, UINT{32});
         case IFC_CTXOPTIONS: return copyValue(output, UINT{CXO_SYSTEM | CXO_MESSAGES | CXO_CSRMESSAGES});
         case IFC_CTXSAVESIZE: return copyValue(output, UINT{sizeof(LOGCONTEXTW)});
@@ -482,7 +487,7 @@ UINT info(bool wide, UINT category, UINT index, void* output) {
         case DVC_NAME: return copyText(wide, output, L"ChapArm virtual pen");
         case DVC_PNPID: return copyText(wide, output, L"CHAPARM\\VIRTUAL_PEN");
         case DVC_HARDWARE: return copyValue(output, UINT{HWC_HARDPROX | HWC_PHYSID_CURSORS});
-        case DVC_NCSRTYPES: return copyValue(output, UINT{1});
+        case DVC_NCSRTYPES: return copyValue(output, kCursorCount);
         case DVC_FIRSTCSR: return copyValue(output, UINT{0});
         case DVC_PKTRATE: return copyValue(output, UINT{240});
         case DVC_PKTDATA: case DVC_CSRDATA: return copyValue(output, kPacketData);
@@ -500,26 +505,31 @@ UINT info(bool wide, UINT category, UINT index, void* output) {
         default: return 0;
         }
     }
-    if (category == WTI_CURSORS) {
+    if (category >= WTI_CURSORS && category < WTI_CURSORS + kCursorCount) {
+        const bool pen = category == WTI_CURSORS + kPenCursor;
         switch (index) {
-        case CSR_NAME: return copyText(wide, output, L"ChapArm pen tip");
-        case CSR_ACTIVE: return copyValue(output, BOOL{TRUE});
-        case CSR_PKTDATA: return copyValue(output, kPacketData);
-        case CSR_BUTTONS: case CSR_BUTTONBITS: return copyValue(output, BYTE{3});
+        case CSR_NAME: return copyText(wide, output, pen ? L"ChapArm pen tip" : L"ChapArm inactive cursor");
+        case CSR_ACTIVE: return copyValue(output, BOOL{pen});
+        case CSR_PKTDATA: return copyValue(output, pen ? kPacketData : WTPKT{0});
+        case CSR_BUTTONS: case CSR_BUTTONBITS: return copyValue(output, static_cast<BYTE>(pen ? 3 : 0));
         case CSR_BUTTONMAP: case CSR_SYSBTNMAP: {
             std::array<BYTE, 32> map{};
-            map[0] = index == CSR_SYSBTNMAP ? SBN_LCLICK : 0;
-            map[1] = index == CSR_SYSBTNMAP ? SBN_RCLICK : 1;
-            map[2] = index == CSR_SYSBTNMAP ? SBN_MCLICK : 2;
+            if (pen) {
+                map[0] = index == CSR_SYSBTNMAP ? SBN_LCLICK : 0;
+                map[1] = index == CSR_SYSBTNMAP ? SBN_RCLICK : 1;
+                map[2] = index == CSR_SYSBTNMAP ? SBN_MCLICK : 2;
+            }
             return copyValue(output, map);
         }
-        case CSR_NPBUTTON: return copyValue(output, BYTE{0});
-        case CSR_NPBTNMARKS: { const UINT marks[2]{1, 1}; return copyBytes(output, marks, sizeof(marks)); }
-        case CSR_PHYSID: return copyValue(output, DWORD{0x43484101});
-        case CSR_TYPE: return copyValue(output, UINT{0x0802}); // non-eraser stylus, Wacom-compatible type bits
+        case CSR_NPBUTTON: return pen ? copyValue(output, BYTE{0}) : 0;
+        case CSR_NPBTNMARKS: {
+            const UINT marks[2]{1, 1}; return pen ? copyBytes(output, marks, sizeof(marks)) : 0;
+        }
+        case CSR_PHYSID: return copyValue(output, DWORD{pen ? 0x43484101u : 0x43484100u});
+        case CSR_TYPE: return copyValue(output, UINT{pen ? 0x0802u : 0x0006u}); // stylus / inactive puck
         case CSR_MODE: return copyValue(output, BOOL{FALSE});
-        case CSR_MINPKTDATA: return copyValue(output, WTPKT{PK_X | PK_Y | PK_BUTTONS});
-        case CSR_MINBUTTONS: return copyValue(output, UINT{1});
+        case CSR_MINPKTDATA: return copyValue(output, pen ? WTPKT{PK_X | PK_Y | PK_BUTTONS} : WTPKT{0});
+        case CSR_MINBUTTONS: return copyValue(output, UINT{pen ? 1u : 0u});
         case CSR_CAPABILITIES: return copyValue(output, UINT{0});
         default: return 0;
         }
@@ -559,7 +569,7 @@ void pack(Context& c, HCTX handle, const Packet& packet, unsigned char* out) {
     if (mask & PK_TIME) field(out, packet.time);
     if (mask & PK_CHANGED) field(out, packet.changed);
     if (mask & PK_SERIAL_NUMBER) field(out, packet.serial);
-    if (mask & PK_CURSOR) field(out, UINT{0});
+    if (mask & PK_CURSOR) field(out, kPenCursor);
     if (mask & PK_BUTTONS) field(out, packet.buttons);
     if (mask & PK_X) field(out, packet.x);
     if (mask & PK_Y) field(out, packet.y);

@@ -48,7 +48,9 @@ jobs:
           name: chaparm-windows-${{ matrix.architecture }}
           path: |
             native/build/${{ matrix.architecture }}/Release/Wintab32.dll
+            native/build/${{ matrix.architecture }}/Release/chaparm-krita.exe
             native/build/${{ matrix.architecture }}/Release/wintab_probe.exe
+            native/build/${{ matrix.architecture }}/Release/krita_launcher_fixture.dll
             dist/*.whl
             README.md
             docs/

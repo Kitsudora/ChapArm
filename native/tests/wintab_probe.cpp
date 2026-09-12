@@ -1,4 +1,23 @@
 #include <windows.h>
+#ifdef CHAPARM_KRITA_FIXTURE
+#include <shellapi.h>
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
+extern "C" int __cdecl krita_main(int argc, char** argv) {
+    // Qt only restores the Unicode Windows command line when argc/argv match
+    // the narrow CRT arguments. Test that contract, including characters that
+    // cannot be represented by common ANSI code pages such as 936 or 1252.
+    if (argc != 4 || argc != __argc || argv != __argv || argv[argc] ||
+        std::strcmp(argv[1], "--probe-entry") || std::strcmp(argv[2], "space separated")) return 38;
+    int wideCount = 0;
+    const auto wide = CommandLineToArgvW(GetCommandLineW(), &wideCount);
+    const bool preserved = wide && wideCount == argc &&
+        !std::wcscmp(wide[2], L"space separated") && !std::wcscmp(wide[3], L"\u7ed8\u753b \U0001f3a8");
+    if (wide) LocalFree(wide);
+    return preserved ? 37 : 38;
+}
+#else
 #include "wintab.h"
 #include "chaparm_bridge.h"
 #include <array>
@@ -9,6 +28,12 @@
 #include <stdexcept>
 #include <string>
 
+// Krita 5.2 requests this format, without the pointer field tested below.
+#define PACKETNAME KRITA
+#define KRITAPACKETDATA (PK_TIME | PK_CURSOR | PK_BUTTONS | PK_X | PK_Y | PK_Z | PK_NORMAL_PRESSURE | PK_TANGENT_PRESSURE | PK_ORIENTATION)
+#define KRITAPACKETMODE 0
+#include "pktdef.h"
+
 // This includes a pointer field and intentional trailing padding on x64.
 // Arrays expose ABI stride errors that a single packet would conceal.
 #define PACKETDATA (PK_CONTEXT | PK_STATUS | PK_TIME | PK_SERIAL_NUMBER | PK_CURSOR | PK_BUTTONS | PK_X | PK_Y | PK_NORMAL_PRESSURE | PK_ORIENTATION)
@@ -18,6 +43,100 @@
 #define CHECK(condition) do { if (!(condition)) throw std::runtime_error(#condition); } while (false)
 
 namespace {
+BOOL CALLBACK findManifest(HMODULE, LPCWSTR, LPWSTR, LONG_PTR result) {
+    *reinterpret_cast<bool*>(result) = true;
+    return FALSE;
+}
+
+DWORD runLauncher(const std::wstring& path, const std::wstring& arguments = L"--chaparm-check") {
+    auto command = L"\"" + path + L"\" " + arguments;
+    SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    HANDLE read = nullptr, write = nullptr;
+    CHECK(CreatePipe(&read, &write, &security, 0));
+    CHECK(SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0));
+    STARTUPINFOW startup{}; startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES; startup.wShowWindow = SW_HIDE;
+    startup.hStdOutput = startup.hStdError = write;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    PROCESS_INFORMATION child{};
+    const bool started = CreateProcessW(path.c_str(), command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+        nullptr, nullptr, &startup, &child) != FALSE;
+    CloseHandle(write);
+    if (!started) { CloseHandle(read); CHECK(started); }
+    const auto wait = WaitForSingleObject(child.hProcess, 5000);
+    if (wait != WAIT_OBJECT_0) {
+        TerminateProcess(child.hProcess, 1);
+        WaitForSingleObject(child.hProcess, 1000);
+    }
+    DWORD result = 1;
+    const bool exited = GetExitCodeProcess(child.hProcess, &result) != FALSE;
+    CloseHandle(child.hThread); CloseHandle(child.hProcess);
+    std::string output;
+    char buffer[1024]; DWORD bytes = 0;
+    while (ReadFile(read, buffer, sizeof(buffer), &bytes, nullptr) && bytes) output.append(buffer, bytes);
+    CloseHandle(read);
+    if (result && result != 37) std::fprintf(stderr, "launcher exit %lu: %s\n", result, output.c_str());
+    CHECK(wait == WAIT_OBJECT_0 && exited);
+    return result;
+}
+
+void launcherTest() {
+    wchar_t executable[32768]{};
+    CHECK(GetModuleFileNameW(nullptr, executable, 32768));
+    std::wstring directory(executable);
+    directory.resize(directory.find_last_of(L"\\/") + 1);
+    const auto originalLauncher = directory + L"chaparm-krita.exe";
+    const auto image = LoadLibraryExW(originalLauncher.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    CHECK(image);
+    bool hasManifest = false;
+    SetLastError(ERROR_SUCCESS);
+    EnumResourceNamesW(image, MAKEINTRESOURCEW(24), findManifest, reinterpret_cast<LONG_PTR>(&hasManifest));
+    const auto resourceError = GetLastError();
+    FreeLibrary(image);
+    CHECK(!hasManifest);
+    CHECK(resourceError == ERROR_RESOURCE_TYPE_NOT_FOUND || resourceError == ERROR_RESOURCE_DATA_NOT_FOUND);
+
+    // A unique directory under the build output keeps all copies disposable.
+    // Cleanup removes only the exact files created here, never recursively.
+    const auto temporary = directory + L"launcher probe " + std::to_wstring(GetCurrentProcessId()) + L"_" + std::to_wstring(GetTickCount64());
+    CHECK(CreateDirectoryW(temporary.c_str(), nullptr));
+    const auto launcher = temporary + L"\\chaparm-krita.exe";
+    const auto local = launcher + L".local";
+    const auto provider = temporary + L"\\Wintab32.dll";
+    const auto krita = temporary + L"\\krita.dll";
+    struct Cleanup {
+        std::wstring directory, launcher, local, provider, krita;
+        ~Cleanup() {
+            DeleteFileW(krita.c_str()); DeleteFileW(provider.c_str());
+            DeleteFileW(local.c_str()); RemoveDirectoryW(local.c_str());
+            DeleteFileW(launcher.c_str()); RemoveDirectoryW(directory.c_str());
+        }
+    } cleanup{temporary, launcher, local, provider, krita};
+    CHECK(CopyFileW(originalLauncher.c_str(), launcher.c_str(), TRUE));
+    const auto marker = CreateFileW(local.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    CHECK(marker != INVALID_HANDLE_VALUE); CloseHandle(marker);
+    CHECK(CopyFileW((directory + L"Wintab32.dll").c_str(), provider.c_str(), TRUE));
+    CHECK(CopyFileW((directory + L"krita_launcher_fixture.dll").c_str(), krita.c_str(), TRUE));
+    // Deploy the marker before the first launch, as an actual install does.
+    // Windows can retain redirection state for an executable first run without it.
+    CHECK(runLauncher(launcher) == 0); // real full-path Windows loader redirection
+    CHECK(runLauncher(launcher, L"--probe-entry \"space separated\" \"\u7ed8\u753b \U0001f3a8\"") == 37);
+    CHECK(CopyFileW((directory + L"Wintab32.dll").c_str(), krita.c_str(), FALSE));
+    CHECK(runLauncher(launcher) == 5); // valid DLL without krita_main
+    CHECK(DeleteFileW(krita.c_str()));
+    CHECK(runLauncher(launcher) == 2); // missing adjacent Krita library
+    CHECK(CopyFileW((directory + L"krita_launcher_fixture.dll").c_str(), krita.c_str(), TRUE));
+    CHECK(CopyFileW((directory + L"krita_launcher_fixture.dll").c_str(), provider.c_str(), FALSE));
+    CHECK(runLauncher(launcher) == 3); // correctly located but not a ChapArm provider
+    CHECK(DeleteFileW(provider.c_str()));
+    CHECK(runLauncher(launcher) == 2); // missing adjacent provider
+    CHECK(DeleteFileW(local.c_str()));
+    CHECK(runLauncher(launcher) == 2); // missing redirection marker
+    CHECK(CreateDirectoryW(local.c_str(), nullptr));
+    CHECK(runLauncher(launcher) == 2); // require the validated file form
+    std::puts("PASS: launcher manifest, isolated full-path DLL loading, entry errors, original CRT and Unicode arguments");
+}
+
 void pump() {
     MSG message{};
     while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
@@ -52,10 +171,33 @@ void selftest() {
     CHECK(SetEnvironmentVariableW(L"CHAPARM_SESSION", session.c_str()));
     const auto module = LoadLibraryW(L"Wintab32.dll");
     CHECK(module);
-    for (const auto name : {"WTInfoA", "WTInfoW", "WTOpenA", "WTOpenW", "WTClose",
-        "WTPacket", "WTPacketsGet", "WTPacketsPeek", "WTGetW", "WTSetW", "WTQueuePacketsEx",
-        "WTEnable", "WTOverlap", "ChapArmPublish", "ChapArmGetStatus"}) CHECK(GetProcAddress(module, name));
-    CHECK(GetProcAddress(module, MAKEINTRESOURCEA(1020)) == GetProcAddress(module, "WTInfoW"));
+    // Direct calls below exercise the import library (including x86 stdcall).
+    // Dynamic clients must also find every public name and official ordinal.
+    const struct { const char* name; WORD ordinal; } exports[]{
+        {"WTInfoA", 20}, {"WTInfoW", 1020}, {"WTOpenA", 21}, {"WTOpenW", 1021},
+        {"WTClose", 22}, {"WTPacketsGet", 23}, {"WTPacket", 24},
+        {"WTEnable", 40}, {"WTOverlap", 41}, {"WTConfig", 60},
+        {"WTGetA", 61}, {"WTGetW", 1061}, {"WTSetA", 62}, {"WTSetW", 1062},
+        {"WTExtGet", 63}, {"WTExtSet", 64}, {"WTSave", 65}, {"WTRestore", 66},
+        {"WTPacketsPeek", 80}, {"WTDataGet", 81}, {"WTDataPeek", 82},
+        {"WTQueueSizeGet", 84}, {"WTQueueSizeSet", 85}, {"WTQueuePacketsEx", 200},
+        {"WTMgrOpen", 100}, {"WTMgrClose", 101}, {"WTMgrContextEnum", 120},
+        {"WTMgrContextOwner", 121}, {"WTMgrDefContext", 122}, {"WTMgrDefContextEx", 206},
+        {"WTMgrDeviceConfig", 140}, {"WTMgrExt", 180}, {"WTMgrCsrEnable", 181},
+        {"WTMgrCsrButtonMap", 182}, {"WTMgrCsrPressureBtnMarks", 183},
+        {"WTMgrCsrPressureResponse", 184}, {"WTMgrCsrExt", 185},
+        {"WTMgrConfigReplaceExA", 202}, {"WTMgrConfigReplaceExW", 1202},
+        {"WTMgrPacketHookExA", 203}, {"WTMgrPacketHookExW", 1203},
+        {"WTMgrPacketUnhook", 204}, {"WTMgrPacketHookNext", 205},
+        {"WTMgrCsrPressureBtnMarksEx", 201},
+        {"ChapArmOpenPublisher", 3000}, {"ChapArmPublish", 3001},
+        {"ChapArmClosePublisher", 3002}, {"ChapArmGetStatus", 3003}
+    };
+    for (const auto& entry : exports) {
+        const auto address = GetProcAddress(module, entry.name);
+        CHECK(address);
+        CHECK(GetProcAddress(module, MAKEINTRESOURCEA(entry.ordinal)) == address);
+    }
     CHECK(sizeof(LOGCONTEXTA) == 172);
     CHECK(sizeof(LOGCONTEXTW) == 212);
     CHECK(sizeof(ChapArmSample) == 48);
@@ -71,6 +213,25 @@ void selftest() {
     CHECK(orientation[0].axResolution != 0);
     CHECK(WTInfoW(WTI_DEVICES + 1, DVC_NAME, nullptr) == 0);
     CHECK(WTInfoW(WTI_EXTENSIONS, 0, nullptr) == 0);
+    UINT cursorCount = 0, firstCursor = 0, deviceCursorCount = 0;
+    CHECK(WTInfoW(WTI_INTERFACE, IFC_NCURSORS, &cursorCount) == sizeof(cursorCount));
+    CHECK(WTInfoW(WTI_DEVICES, DVC_FIRSTCSR, &firstCursor) == sizeof(firstCursor));
+    CHECK(WTInfoW(WTI_DEVICES, DVC_NCSRTYPES, &deviceCursorCount) == sizeof(deviceCursorCount));
+    CHECK(cursorCount == 2 && firstCursor == 0 && deviceCursorCount == cursorCount);
+    UINT penCursor = cursorCount, activeCursors = 0;
+    for (UINT cursor = firstCursor; cursor < firstCursor + deviceCursorCount; ++cursor) {
+        BOOL active = FALSE;
+        CHECK(WTInfoW(WTI_CURSORS + cursor, CSR_NAME, nullptr) > 0);
+        CHECK(WTInfoW(WTI_CURSORS + cursor, CSR_ACTIVE, &active) == sizeof(active));
+        if (active) { penCursor = cursor; ++activeCursors; }
+    }
+    // Krita uses cursor ID modulo three, in addition to CSR_TYPE, to decide
+    // whether it may pass pressure through. ID zero would silently lose it.
+    CHECK(activeCursors == 1 && penCursor % 3 == 1);
+    UINT cursorType = 0;
+    CHECK(WTInfoW(WTI_CURSORS + penCursor, CSR_TYPE, &cursorType) == sizeof(cursorType));
+    CHECK(cursorType == 0x0802);
+    CHECK(WTInfoW(WTI_CURSORS + cursorCount, CSR_NAME, nullptr) == 0);
 
     // Context notifications must be sent even without CXO_MESSAGES.
     WNDCLASSW windowClass{};
@@ -132,6 +293,7 @@ void selftest() {
     const auto count = WTPacketsPeek(context, 64, packets.data());
     CHECK(count == 4);
     CHECK(packets[0].pkContext == context);
+    CHECK(packets[0].pkCursor == penCursor && packets[1].pkCursor == penCursor);
     CHECK(std::abs(packets[0].pkX - 16384) <= 1);
     CHECK(std::abs(packets[0].pkY - 49151) <= 1);
     CHECK(packets[1].pkNormalPressure == static_cast<UINT>(std::lround(.4f * 8191)));
@@ -227,6 +389,26 @@ void selftest() {
     CHECK(ChapArmClosePublisher(publisher));
     CHECK(WTClose(context));
     CHECK(!WTClose(context));
+
+    // A first contact must survive Krita consuming one hover packet to identify
+    // the pen on proximity entry. Also verify its 44-byte packet array stride.
+    CHECK(sizeof(KRITAPACKET) == 44);
+    lc.lcPktData = lc.lcMoveMask = KRITAPACKETDATA;
+    lc.lcPktMode = KRITAPACKETMODE;
+    const auto kritaContext = WTOpenW(nullptr, &lc, TRUE); CHECK(kritaContext);
+    publisher = ChapArmOpenPublisher(session.c_str()); CHECK(publisher);
+    s = sample(.2f, .3f, .5f); CHECK(ChapArmPublish(publisher, &s));
+    std::array<KRITAPACKET, 2> kritaPackets{};
+    until([&] { return WTPacketsPeek(kritaContext, 2, kritaPackets.data()) == 2; });
+    CHECK(kritaPackets[0].pkCursor == penCursor && kritaPackets[0].pkNormalPressure == 0);
+    CHECK(kritaPackets[1].pkCursor == penCursor && kritaPackets[1].pkButtons == 1);
+    CHECK(kritaPackets[1].pkNormalPressure == static_cast<UINT>(std::lround(.5f * 8191)));
+    CHECK(kritaPackets[1].pkOrientation.orAltitude == 700);
+    CHECK(WTPacketsGet(kritaContext, 1, kritaPackets.data()) == 1);
+    CHECK(WTPacketsGet(kritaContext, 1, kritaPackets.data()) == 1);
+    CHECK(kritaPackets[0].pkCursor == penCursor && kritaPackets[0].pkNormalPressure > 0);
+    CHECK(ChapArmClosePublisher(publisher));
+    CHECK(WTClose(kritaContext));
     FreeLibrary(module);
     std::puts("PASS: x86/x64 ABI, ANSI/Unicode, scaling, pressure, orientation, queues, contexts, IPC, watchdog release");
 }
@@ -235,7 +417,7 @@ void selftest() {
 int wmain(int argc, wchar_t** argv) {
     try {
         if (argc == 3 && std::wstring(argv[1]) == L"--writer") return writer(argv[2]);
-        if (argc == 2 && std::wstring(argv[1]) == L"--selftest") { selftest(); return 0; }
+        if (argc == 2 && std::wstring(argv[1]) == L"--selftest") { selftest(); launcherTest(); return 0; }
         ChapArmStatus status{}; status.size = sizeof(status); status.version = 1;
         CHECK(ChapArmGetStatus(nullptr, &status));
         std::printf("publisher_pid=%lu consumer_pid=%lu contexts=%lu enabled=%lu samples=%llu\n",
@@ -249,3 +431,4 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
 }
+#endif

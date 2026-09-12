@@ -24,6 +24,8 @@ or into the painting application's canvas.
 - `Wintab32.dll`: Wintab contexts, queries, packet queues, coordinates, pressure,
   orientation, proximity and pen-up events; a separate publisher ABI feeds it
   from the simulator. x64 and Win32 build targets and one native probe.
+- An application-specific Krita launcher and deployment script for selecting
+  ChapArm's provider without changing system DLLs or tablet drivers.
 
 The diagnostic canvas is for checking simulated pen behaviour. **Krita supplies
 the professional brush engine.** ChapArm models a rigid grip and spherical nib;
@@ -75,18 +77,27 @@ Windows SDK and CMake, then:
 .\scripts\build-native.ps1 -Architecture x64
 ```
 
-Follow [Windows/Krita setup](docs/windows-krita.md) to deploy the provider beside
-an explicitly selected **portable Krita 5.2-series** executable, calibrate the
-visible canvas rectangle, enable output, and run the acceptance checks.
+Follow [Windows/Krita setup](docs/windows-krita.md) to deploy the launcher to an
+explicitly selected portable Krita directory, calibrate the visible canvas
+rectangle, enable output, and run the acceptance checks. The official Krita
+5.2.16 build ignores a provider simply placed beside its original executable;
+it needs the documented application-specific loading adaptation.
 
 **Compatibility boundary:** Wintab is an application/driver API, not a file format.
 This release implements an application-scoped provider; it does not install a
-system-wide virtual tablet driver. Krita 5.2's custom backend is the initial
-integration target. Applications that explicitly load the system Wintab DLL can
-ignore an application-local provider. Newer Krita/Qt versions and other drawing
-applications require their own compatibility validation. Do not replace files
-in Windows system directories. An ABI probe pass does not by itself prove that
-Krita received and painted the stroke.
+system-wide virtual tablet driver. The official Krita 5.2.16 build uses Qt's
+tablet backend, despite the presence of a custom backend in Krita's source tree.
+Other Krita builds and drawing applications require their own compatibility
+validation. Do not replace files in Windows system directories. A native probe
+pass or an open Krita context does not by itself prove that Krita painted a
+stroke. See the [verification record](docs/verification.md) for completed checks
+and remaining acceptance work.
+
+The built and deployed launcher has produced a real pressure-sensitive stroke
+in Krita 5.2.16 and opened a document with Chinese characters and emoji in its
+filename. Windows acceptance also includes hover, tablet tilt and contact
+release checks; the verification record identifies the trial used for each.
+Other application versions remain unverified.
 
 ## Documentation
 
@@ -94,7 +105,7 @@ Krita received and painted the stroke.
 - [Dynamics, control, transport and observation architecture](docs/architecture.md)
 - [Agent operator guide, HTTP commands and MCP configuration](docs/agent-guide.md)
 - [Windows build, deployment and Krita verification](docs/windows-krita.md)
-- [Executed checks and pending Windows acceptance](docs/verification.md)
+- [Executed checks and pending application acceptance](docs/verification.md)
 - [Contributor instructions](AGENTS.md)
 - [Third-party Wintab header notices](native/THIRD_PARTY_NOTICES.md)
 
@@ -107,8 +118,9 @@ Krita received and painted the stroke.
 ```
 
 Python checks are consolidated in `tests/test_chaparm.py`. Native ABI/IPC checks
-are consolidated in `native/tests/wintab_probe.cpp`. CI builds and exercises
-both Windows architectures and uploads native artifacts. A GUI session is
+are consolidated in `native/tests/wintab_probe.cpp`. The CI workflow is configured
+to exercise both Windows architectures and upload native artifacts; its actual
+run status is recorded separately. A GUI session is
 required for the separately documented Krita brush/pressure acceptance test.
 
 The physics loop targets 500 Hz of simulation time, and tablet publication runs

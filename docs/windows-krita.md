@@ -27,7 +27,8 @@ Run from the repository root in PowerShell:
 `setup.ps1` creates `.venv` and installs ChapArm plus development dependencies.
 Use `-Python 'C:\Path\To\python.exe'` to choose an interpreter explicitly.
 The build script builds and runs the native API/stream probe. The resulting DLL
-is `native\build\x64\Release\Wintab32.dll`.
+is `native\build\x64\Release\Wintab32.dll`; the Krita launcher is
+`native\build\x64\Release\chaparm-krita.exe`.
 
 For a 32-bit application, also build `-Architecture Win32`. The Python process
 must load a DLL matching Python's bitness; the application loads a copy matching
@@ -49,43 +50,81 @@ available. Stop the service with Ctrl+C in its terminal.
 The provider is loaded into a selected application's process as `Wintab32.dll`.
 It does not install an OS tablet or replace a system driver.
 
-The initial candidate is a **Krita 5.2 portable build using Krita's custom
-Wintab backend**. That branch's source loads `wintab32` with `QLibrary`, which
-makes an application-local provider a plausible route. This is a source-based
-compatibility assessment, not a completed Windows drawing test.
-[Krita 5.2 loader source](https://github.com/KDE/krita/blob/krita/5.2/libs/ui/input/wintab/kis_tablet_support_win.cpp)
+The official **Krita 5.2.16 x64 portable build** uses Qt's tablet backend.
+Putting `Wintab32.dll` beside its original `krita.exe` was tested and did not
+load the provider or open a consumer context. Krita's source still contains a
+custom `QLibrary` backend, but that code is excluded when
+`USE_QT_TABLET_WINDOWS=ON`. Source presence was insufficient evidence for the
+earlier recommendation of a stock Krita 5.2 portable build.
+[Krita 5.2.16 build options](https://github.com/KDE/krita/blob/v5.2.16/CMakeLists.txt),
+[conditional backend build](https://github.com/KDE/krita/blob/v5.2.16/libs/ui/CMakeLists.txt)
 
-Do not assume a newer Krita build uses the same loader. Qt's upstream Windows
-tablet backend uses `QSystemLibrary`; its loading policy can restrict lookup to
-the Windows system directory. An application-local DLL may therefore be ignored.
-Such a build needs an application-source loader adaptation to an explicit
-ChapArm DLL path, or a future alternative backend. Do not work around this by
-replacing a system DLL or changing the machine's DLL search configuration.
-[Qt Windows tablet source](https://github.com/qt/qtbase/blob/dev/src/plugins/platforms/windows/qwindowstabletsupport.cpp),
-[Qt system-library source](https://github.com/qt/qtbase/blob/dev/src/corelib/plugin/qsystemlibrary.cpp)
+Qt 5.15.7 loads Wintab through `QSystemLibrary`, which selects the system
+library path. Selecting WinTab in Krita chooses this backend; it cannot enable
+an uncompiled custom backend.
+[Qt tablet loader](https://github.com/qt/qtbase/blob/v5.15.7-lts-lgpl/src/plugins/platforms/windows/qwindowstabletsupport.cpp)
 
-## Deploy only to the selected application
+ChapArm supplies `chaparm-krita.exe` for a selected portable installation. It
+calls that installation's original `krita.dll!krita_main`. An empty
+`chaparm-krita.exe.local` **file** enables Windows DLL redirection for this
+launcher, with ChapArm's `Wintab32.dll` beside it. The launcher is built without
+an embedded manifest so this works without a registry override. The marker
+applies to the launcher's DLL lookup, not just one DLL name, so deployment is
+scoped to a separate selected portable installation. It does not replace the
+original Krita executable or libraries, system DLLs, or tablet drivers. Start
+the launcher to use this integration; starting the original `krita.exe` does
+not select it.
+
+This is an application-specific loading adaptation, not general Wintab driver
+installation. The built launcher has passed actual pressure-sensitive painting
+and Unicode document opening with Krita 5.2.16. The
+[verification record](verification.md) gives the measured results and remaining
+limits. Other Krita versions, entry-point ABIs and application loaders need
+separate validation.
+
+## Deploy the Krita launcher
 
 Close the portable application first. Supply its exact executable path:
 
 ```powershell
-.\scripts\deploy-wintab.ps1 `
+.\scripts\deploy-krita.ps1 `
   -AppExecutable 'C:\Apps\Krita-ChapArm\bin\krita.exe' `
+  -LauncherPath '.\native\build\x64\Release\chaparm-krita.exe' `
   -DllPath '.\native\build\x64\Release\Wintab32.dll'
 ```
 
-The script checks the executable/DLL machine types, refuses Windows directories,
-and refuses to overwrite an existing provider or deployment record. It writes
-the DLL next to the selected executable and records its hash. If a provider
-already exists, choose a separate clean portable installation; do not delete a
-tablet vendor's file to make the deployment succeed.
+The deployment adds `chaparm-krita.exe`, the empty `chaparm-krita.exe.local`
+file, and `Wintab32.dll` inside the selected `bin` directory, together with
+`ChapArm.krita-deployment.json`. The record contains hashes for all three
+deployment files and the original Krita executable. The script checks
+architecture, running processes, existing files and reparse-point paths before
+deployment. It refuses to overwrite any provider. Remove a previous recorded
+`deploy-wintab.ps1` deployment with that script's `-Remove` mode first; choose a
+clean portable installation if the existing provider belongs to a tablet vendor.
+
+The `.local` marker used by this deployment is an empty file. Deploy all three
+files before starting the launcher for the first time from that path.
+
+Check the deployed loader without starting the GUI:
+
+```powershell
+$launcherCheck = Start-Process `
+  -FilePath 'C:\Apps\Krita-ChapArm\bin\chaparm-krita.exe' `
+  -ArgumentList '--chaparm-check' -WindowStyle Hidden -Wait -PassThru
+if ($launcherCheck.ExitCode -ne 0) {
+  throw "Krita loader check failed (exit code $($launcherCheck.ExitCode))."
+}
+```
+
+This checks the provider location, system-path request redirection and the
+`krita_main` entry point. It does not validate tablet events or brush rendering.
 
 Launch Krita from a PowerShell process with the same session name used by
 ChapArm. This environment variable applies only to this shell and its children:
 
 ```powershell
 $env:CHAPARM_SESSION = 'drawing'
-Start-Process 'C:\Apps\Krita-ChapArm\bin\krita.exe'
+Start-Process 'C:\Apps\Krita-ChapArm\bin\chaparm-krita.exe'
 ```
 
 Krita must be a newly launched process. An already-running instance may handle
@@ -97,6 +136,18 @@ restart as required. Open a new document and choose a brush with pressure-driven
 size or opacity. Krita exposes both API selection and a tablet tester in these
 settings; the tester's tablet events include raw pressure.
 [Krita tablet settings](https://docs.krita.org/en/reference_manual/preferences/tablet_settings.html)
+
+The portable ZIP does not itself isolate Krita's user settings. For automated
+acceptance, use a separate resource directory through Krita's
+`--resource-location` argument, and preserve any existing user configuration
+before changing it. Merely setting `APPDATA` or `LOCALAPPDATA` in a shell is not
+proof that Qt's Windows configuration paths have changed.
+
+For an application whose loader has independently been confirmed to support
+direct DLL placement, the existing `deploy-wintab.ps1` remains available. It
+checks architecture, refuses Windows directories and existing providers, and
+records the deployed DLL hash. It is not the working deployment route for the
+stock Krita 5.2.16 executable.
 
 ## Calibrate the visible painting area
 
@@ -136,7 +187,8 @@ Query state in another terminal or through MCP:
 Inspect the native output status. Loading a publisher DLL does not imply that
 Krita opened a Wintab context. Inspect `wintab.context_count`,
 `enabled_context_count`, `consumer_age_ms` and `consumer_pid`. Confirm a recent
-enabled context belongs to the selected Krita process. `wintab.ready` additionally
+enabled context belongs to the selected `chaparm-krita.exe` process, which hosts
+Krita. `wintab.ready` additionally
 requires that process to own the foreground window; it can be false while you
 are typing the state command in a foreground terminal. Poll from an agent or
 background client while Krita has focus to check readiness for drawing. Native
@@ -200,15 +252,17 @@ Windows version, display scaling, DLL architecture and session name.
 The automated probe does not validate brush rendering, application loading or
 all display configurations. Record unsuccessful cases as compatibility gaps.
 
-## Remove or update the provider
+## Remove or update the deployment
 
 Close the selected Krita process, then remove the recorded provider:
 
 ```powershell
-.\scripts\deploy-wintab.ps1 `
+.\scripts\deploy-krita.ps1 `
   -AppExecutable 'C:\Apps\Krita-ChapArm\bin\krita.exe' -Remove
 ```
 
-Removal checks the deployment record and DLL hash. It refuses to remove a DLL
-that changed after deployment. To update ChapArm, remove the old recorded copy,
-rebuild and deploy again. The regular system tablet installation is unchanged.
+Removal checks the deployment record and recorded file hashes. Close the
+launcher first; changed deployment files require inspection before removal.
+To update ChapArm, remove the old recorded deployment, rebuild and deploy again.
+For a direct deployment created with `deploy-wintab.ps1`, use that script's
+`-Remove` mode instead. The regular system tablet installation is unchanged.
