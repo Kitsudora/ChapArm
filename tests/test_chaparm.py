@@ -378,8 +378,12 @@ def test_windows_krita_deployment_preserves_existing_and_changed_files(tmp_path)
                 "-File", str(script), "-AppExecutable", str(app)]
         args += (["-Remove"] if remove else
                  ["-LauncherPath", str(source_launcher), "-DllPath", str(dll)])
+        # A pwsh -> Python -> powershell.exe chain otherwise inherits incompatible
+        # PowerShell 7 module paths. Let Windows PowerShell build its own defaults.
+        child_env = {key: value for key, value in (os.environ if env is None else env).items()
+                     if key.upper() != "PSMODULEPATH"}
         result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
-                                errors="replace", timeout=20, env=env)
+                                errors="replace", timeout=20, env=child_env)
         output = result.stdout + result.stderr
         if error:
             assert result.returncode != 0 and error in output, output

@@ -45,6 +45,8 @@ third-party application binaries are intentionally excluded from git.
 
 Candidate: official **Krita 5.2.16 x64 portable**, revision **7d9aefc**, compiled
 and loaded Qt **5.15.7**, running in the interactive Windows console session.
+Krita's system report recorded one **2560 x 1600** display, logical DPI **120**
+and application scale **1** (`out/acceptance/final-krita-sysinfo.log`).
 
 Direct deployment beside the original `krita.exe` failed: the process did not
 load ChapArm's `Wintab32.dll` and the publisher reported no consumer context.
@@ -154,6 +156,20 @@ official ZIP.
   configurations. A successful launch or context does not cover these cases.
 - GitHub submission and Windows Actions results. Local build/test success must
   not be reported as a successful remote workflow run.
+
+## GitHub and Windows Actions
+
+The restored history and Windows changes were pushed without force as
+`132bade653e642756300755727d455cfefe0f739`, preserving both the bundle commit
+and the remote initialization commit. The
+[first Windows Actions run](https://github.com/Kitsudora/ChapArm/actions/runs/34693637507)
+passed native builds and CTest on both architectures. Its x64 Python step
+failed to load `Get-FileHash`. A related module-load failure was reproduced
+locally with an incompatible inherited PowerShell module path; the original
+CI failure was not fully reproduced locally. The deployment test starts that
+subprocess with its own module path, following Microsoft's
+[cross-version subprocess guidance](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath?view=powershell-7.6#starting-windows-powershell-from-powershell-7).
+A corrected remote workflow result is still pending.
 
 ## Earlier handoff evidence
 
