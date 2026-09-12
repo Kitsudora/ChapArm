@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>ChapArm · Arm & pen laboratory</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <a class="wordmark" href="/" aria-label="ChapArm home"><span class="mark">C<span>•</span></span>ChapArm<span class="version">07 DOF</span></a>
+    <div class="header-caption">ARM & PEN LABORATORY</div>
+    <div class="header-actions"><span id="connection" class="status"><i></i>Connecting</span><button id="pause" class="quiet">Pause</button><button id="reset" class="quiet">Reset</button><button id="stop" class="stop">Stop motion <kbd>Esc</kbd></button></div>
+  </header>
+
+  <main>
+    <section class="intro"><div><p class="eyebrow">A LITTLE IMPERFECT. ENTIRELY PHYSICAL.</p><h1>Intent meets resistance.</h1><p class="subtitle">A right arm, a virtual pen, and a surface that pushes back.</p></div><div class="clock"><span>SIMULATION TIME</span><strong id="sim-time">0.00 <small>s</small></strong></div></section>
+    <div id="notice" class="notice" role="status" hidden></div>
+
+    <section class="workspace" aria-label="Live simulation views">
+      <article class="panel arm-panel">
+        <div class="panel-heading"><div><span class="section-number">01</span><h2>Arm space</h2><span class="pill">LIVE PHYSICS</span></div><button id="camera-reset" class="icon-button" title="Reset view">Reset view ↗</button></div>
+        <div class="arm-stage"><canvas id="arm" aria-label="Three-dimensional arm visualization; drag to orbit, scroll to zoom"></canvas><div class="view-label">WORLD SPACE <span>+Z UP</span></div><div class="view-legend"><span><i class="actual"></i>Actual arm</span><span><i class="target"></i>Target tip</span><span><i class="force"></i>Contact force</span></div><div class="camera-hint">Drag to orbit <b>·</b> Scroll to zoom</div><div class="contact-badge" id="contact-badge"><i></i><span>Pen lifted</span></div></div>
+        <div class="arm-footer"><span>Shoulder <b>3</b></span><i>→</i><span>Elbow <b>1</b></span><i>→</i><span>Forearm <b>1</b></span><i>→</i><span>Wrist <b>2</b></span><span class="footer-right">Fixed grip</span></div>
+      </article>
+
+      <article class="panel paper-panel">
+        <div class="panel-heading"><div><span class="section-number">02</span><h2>Drawing surface</h2></div><div class="segmented" role="group" aria-label="Image source"><button id="view-internal" class="selected" aria-pressed="true">Internal</button><button id="view-external" aria-pressed="false">Capture</button></div></div>
+        <div class="paper-stage" id="paper-stage"><div class="paper-wrapper"><img id="paper-image" src="/api/canvas.png" alt="Current internal drawing canvas"><canvas id="paper-input" aria-label="Drag to plan a pen stroke on the canvas"></canvas></div><div id="capture-message" class="capture-message" hidden>Loading external window capture…</div></div>
+        <div class="paper-footer"><span id="paper-hint">Drag on the paper to plan a stroke</span><button id="clear-plan" class="quiet" disabled>Clear</button><button id="draw-stroke" class="primary small" disabled>Draw stroke ↗</button></div>
+      </article>
+    </section>
+
+    <section class="telemetry" aria-label="Live mechanical feedback">
+      <div><span class="metric-label">NORMAL FORCE</span><strong id="normal-force">0.000 <small>N</small></strong><div class="metric-bar"><i id="force-meter"></i></div></div>
+      <div><span class="metric-label">TANGENTIAL FORCE</span><strong id="tangent-force">0.000 <small>N</small></strong><span class="metric-note">Resistance along the paper</span></div>
+      <div><span class="metric-label" id="target-error-label">TIP TARGET ERROR</span><strong id="target-error">0.00 <small>mm</small></strong><span class="metric-note" id="target-error-note">Intent − actual position</span></div>
+      <div><span class="metric-label">ACTUAL PEN PRESSURE</span><strong id="pressure">0.0 <small>%</small></strong><span class="metric-note">Derived from contact force</span></div>
+      <div><span class="metric-label">CURRENT ACTION</span><strong class="action-value" id="action-status">Idle</strong><span class="metric-note" id="action-detail">Waiting for a command</span></div>
+    </section>
+
+    <section class="controls" aria-label="Arm controls">
+      <article class="panel target-panel">
+        <div class="panel-heading"><div><span class="section-number">03</span><h2>Move the pen</h2></div><span class="unit-tag">WORLD · mm</span></div>
+        <div class="panel-body"><p class="control-description">Set an intention. The controller and contact determine the actual movement.</p><div class="xyz-inputs"><label><span><i class="axis-x">X</i>Left / right</span><input id="target-x" type="number" value="0" min="-200" max="250" step="1"></label><label><span><i class="axis-y">Y</i>Forward</span><input id="target-y" type="number" value="300" min="150" max="550" step="1"></label><label><span><i class="axis-z">Z</i>Height</span><input id="target-z" type="number" value="30" min="-10" max="300" step="1"></label></div><div class="actual-position" id="actual-position">Actual: — / — / — mm</div><label class="duration-field">Move / stroke duration <span><input id="duration" type="number" min="0.1" max="30" step="0.1" value="2.0"> s</span></label><div class="button-row"><button id="move" class="primary">Move to target ↗</button><button id="use-actual" class="quiet">Use actual</button></div></div>
+      </article>
+
+      <article class="panel force-panel">
+        <div class="panel-heading"><div><span class="section-number">04</span><h2>Contact & feel</h2></div><span class="unit-tag">NEWTONS</span></div>
+        <div class="panel-body"><p class="control-description">Desired force during a stroke. The actual pressure can lag or vary.</p><div class="force-value"><output id="desired-force">0.50</output><span>N <small>target contact force</small></span></div><input id="force" class="force-slider" type="range" min="0.05" max="3" step="0.05" value="0.5" aria-label="Target contact force in newtons"><div class="range-labels"><span>Light · 0.05 N</span><span>Firm · 3 N</span></div><div class="contact-info"><div><span>Contact</span><b id="contact-state">Air</b></div><div><span>Tip speed</span><b id="tip-speed">0.0 mm/s</b></div><div><span>Tablet output</span><b id="tablet-state">Waiting</b></div></div><button id="approach" class="secondary full">Approach surface ↓</button><p class="help-text">Descend up to 50 mm at 10 mm/s; stop on contact.</p></div>
+      </article>
+
+      <article class="panel joints-panel">
+        <div class="panel-heading"><div><span class="section-number">05</span><h2>Joint intentions</h2></div><span class="unit-tag">DEGREES</span></div>
+        <div class="panel-body"><div id="joints" class="joint-list"></div><div class="joint-key"><span><i></i>Target sliders</span><span>Actual angles at right</span></div><div class="button-row"><button id="apply-joints" class="secondary">Apply joint targets</button><button id="sync-joints" class="quiet">Use actual</button></div></div>
+      </article>
+    </section>
+    <footer class="app-footer"><span>ChapArm <b>·</b> Local operator console</span><span id="loop-status">Connecting to simulation…</span><span>SI units in the API <b>·</b> <kbd>Space</kbd> pause <b>·</b> <kbd>Esc</kbd> stop</span></footer>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

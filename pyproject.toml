@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chaparm"
+version = "0.1.0"
+description = "A force-aware seven-DoF drawing arm with Windows Wintab output"
+requires-python = ">=3.11"
+dependencies = ["mujoco>=3.3,<4", "numpy>=1.26,<3", "Pillow>=10,<13"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+
+[project.scripts]
+chaparm = "chaparm.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+chaparm = ["assets/*.xml", "web/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

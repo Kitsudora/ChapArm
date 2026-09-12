@@ -1,0 +1,56 @@
+name: Windows build and verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [x64, Win32]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        if: matrix.architecture == 'x64'
+        with:
+          python-version: '3.12'
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          Get-ChildItem scripts/*.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { throw ($errors | Out-String) }
+          }
+      - name: Build and exercise Wintab provider
+        shell: pwsh
+        run: ./scripts/build-native.ps1 -Architecture ${{ matrix.architecture }}
+      - name: Install simulator and run consolidated checks
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        run: |
+          python -m pip install -e '.[dev]'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pytest -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip wheel . --no-deps --wheel-dir dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chaparm-windows-${{ matrix.architecture }}
+          path: |
+            native/build/${{ matrix.architecture }}/Release/Wintab32.dll
+            native/build/${{ matrix.architecture }}/Release/wintab_probe.exe
+            dist/*.whl
+            README.md
+            docs/
+            scripts/
+          if-no-files-found: error

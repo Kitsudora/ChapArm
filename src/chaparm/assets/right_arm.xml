@@ -1,0 +1,63 @@
+<mujoco model="ChapArm right arm">
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"
+          solver="Newton" iterations="60" tolerance="1e-9" cone="elliptic"/>
+  <size njmax="200" nconmax="50"/>
+  <visual>
+    <global azimuth="135" elevation="-25"/>
+    <rgba haze="0.1 0.12 0.16 1"/>
+  </visual>
+  <default>
+    <joint type="hinge" armature="0.002" damping="0.1" limited="true"/>
+    <geom type="capsule" contype="0" conaffinity="0" rgba="0.69 0.77 0.87 1"/>
+    <site size="0.006" rgba="0.1 0.9 0.8 1"/>
+    <motor ctrllimited="true"/>
+  </default>
+  <worldbody>
+    <light pos="0 -0.2 1.5" dir="0 0 -1" diffuse="0.9 0.9 0.9"/>
+    <camera name="overview" pos="0.85 -0.55 0.75" xyaxes="0.7 0.7 0 -0.4 0.4 0.82"/>
+    <!-- A finite canvas, top at z=0; only the spherical nib collides in v1. -->
+    <geom name="canvas" type="box" pos="0 0.35 -0.005" size="0.15 0.15 0.005"
+          rgba="0.98 0.98 0.96 1" contype="1" conaffinity="2"
+          friction="0.25 0.002 0.0001" condim="3" solref="0.01 1.5"
+          solimp="0.1 0.95 0.001"/>
+    <geom name="torso" type="box" pos="0 0 0.21" size="0.13 0.07 0.2"
+          rgba="0.22 0.28 0.38 0.5"/>
+    <body name="upper_arm" pos="0.18 0 0.35">
+      <joint name="shoulder_yaw" axis="0 0 1" range="-1.6 1.6" damping="1.4" armature="0.015"/>
+      <joint name="shoulder_pitch" axis="1 0 0" range="-1.9 1.9" damping="1.6" armature="0.015"/>
+      <joint name="shoulder_roll" axis="0 1 0" range="-1.6 1.6" damping="0.8" armature="0.01"/>
+      <geom name="upper_arm_shape" fromto="0 0 0 0 0.29 0" size="0.033" mass="1.6"/>
+      <site name="shoulder" pos="0 0 0"/>
+      <body name="forearm" pos="0 0.29 0">
+        <joint name="elbow_flexion" axis="1 0 0" range="0.05 2.6" damping="0.6" armature="0.008"/>
+        <joint name="forearm_rotation" axis="0 1 0" range="-1.6 1.6" damping="0.1"/>
+        <geom name="forearm_shape" fromto="0 0 0 0 0.25 0" size="0.026" mass="1.0"/>
+        <site name="elbow" pos="0 0 0"/>
+        <body name="hand" pos="0 0.25 0">
+          <joint name="wrist_flexion" axis="1 0 0" range="-1.4 1.4" damping="0.08"/>
+          <joint name="wrist_deviation" axis="0 0 1" range="-0.65 0.65" damping="0.06"/>
+          <geom name="hand_shape" type="box" pos="0 0.035 0" size="0.032 0.044 0.018" mass="0.35"/>
+          <site name="wrist" pos="0 0 0"/>
+          <body name="pen" pos="0 0.065 0">
+            <geom name="pen_shaft" fromto="0 0 -0.097 0 0 0.08" size="0.004" mass="0.018" rgba="0.16 0.62 0.66 1"/>
+            <geom name="pen_nib" type="sphere" pos="0 0 -0.1" size="0.0015" mass="0.0005"
+                  contype="2" conaffinity="1" condim="3" friction="0.25 0.002 0.0001"
+                  solref="0.01 1.5" solimp="0.1 0.95 0.001" rgba="0.12 0.12 0.13 1"/>
+            <site name="grip" pos="0 0 0"/>
+            <site name="nib_center" pos="0 0 -0.1" size="0.002"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="shoulder_yaw_motor" joint="shoulder_yaw" ctrlrange="-25 25"/>
+    <motor name="shoulder_pitch_motor" joint="shoulder_pitch" ctrlrange="-25 25"/>
+    <motor name="shoulder_roll_motor" joint="shoulder_roll" ctrlrange="-20 20"/>
+    <motor name="elbow_motor" joint="elbow_flexion" ctrlrange="-15 15"/>
+    <motor name="forearm_motor" joint="forearm_rotation" ctrlrange="-4 4"/>
+    <motor name="wrist_flexion_motor" joint="wrist_flexion" ctrlrange="-3 3"/>
+    <motor name="wrist_deviation_motor" joint="wrist_deviation" ctrlrange="-3 3"/>
+  </actuator>
+</mujoco>
